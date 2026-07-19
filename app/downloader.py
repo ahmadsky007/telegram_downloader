@@ -88,11 +88,22 @@ def probe(url: str) -> dict:
 
 def download_video(url: str, workdir: Path, height: int | None, hook: Callable) -> Path:
     if height is None:
-        fmt = "bv*[vcodec^=avc1]+ba[ext=m4a]/bv*+ba/b"
-    else:
+        fmt = (
+            "bv*[height>1080][vcodec!^=av01]+ba[ext=m4a]/"
+            "bv*[vcodec^=avc1]+ba[ext=m4a]/"
+            "bv*[vcodec!^=av01]+ba/bv*+ba/b"
+        )
+    elif height <= 1080:
         fmt = (
             f"bv*[vcodec^=avc1][height<={height}]+ba[ext=m4a]/"
+            f"bv*[height<={height}][vcodec!^=av01]+ba/"
             f"bv*[height<={height}]+ba/b[height<={height}]/b"
+        )
+    else:
+        fmt = (
+            f"bv*[height<={height}][height>1080][vcodec!^=av01]+ba[ext=m4a]/"
+            f"bv*[vcodec^=avc1]+ba[ext=m4a]/"
+            f"bv*[height<={height}]+ba/b"
         )
     opts = _base_opts(workdir) | {
         "format": fmt,
