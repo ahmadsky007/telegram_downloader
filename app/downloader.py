@@ -20,6 +20,7 @@ def _base_opts(workdir: Path | None = None) -> dict:
         "noplaylist": True,
         "socket_timeout": 30,
         "retries": 3,
+        "concurrent_fragment_downloads": 4,
     }
     if workdir is not None:
         opts["outtmpl"] = str(workdir / "%(title).80B [%(id)s].%(ext)s")
