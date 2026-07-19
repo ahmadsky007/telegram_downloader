@@ -27,6 +27,7 @@ router = Router()
 
 REQUEST_TTL = 900
 UPLOAD_TIMEOUT = 900
+MAX_ACTIVE_PER_USER = 3
 URL_RE = re.compile(r"https?://\S+")
 ALLOWED_HOSTS = ("youtube.com", "youtu.be", "instagram.com")
 
@@ -51,7 +52,8 @@ class BotState:
         self.settings = settings
         self.pending: dict[str, PendingRequest] = {}
         self.history: dict[int, deque] = {}
-        self.active_users: set[int] = set()
+        self.active: dict[int, int] = {}
+        self.tasks: set[asyncio.Task] = set()
         self.download_slots = asyncio.Semaphore(settings.max_concurrent_downloads)
 
 
@@ -308,8 +310,12 @@ async def cb_download(cb: CallbackQuery, bot: Bot, st: BotState) -> None:
     req = await _get_request(cb, st, rid)
     if req is None:
         return
-    if cb.from_user.id in st.active_users:
-        await cb.answer("⏳ Wait for your current download to finish.", show_alert=True)
+    if st.active.get(cb.from_user.id, 0) >= MAX_ACTIVE_PER_USER:
+        await cb.answer(
+            f"⏳ You already have {MAX_ACTIVE_PER_USER} downloads running. "
+            "Wait for one to finish.",
+            show_alert=True,
+        )
         return
     limit_bytes = st.settings.max_file_size_mb * 1_000_000
     if kind == "dv":
@@ -323,13 +329,30 @@ async def cb_download(cb: CallbackQuery, bot: Bot, st: BotState) -> None:
             await send_direct_link(cb, st, req, est)
             return
     st.pending.pop(rid, None)
-    st.active_users.add(req.user_id)
-    await cb.answer()
+    st.active[req.user_id] = st.active.get(req.user_id, 0) + 1
+    await cb.answer("Started — the file will arrive when it's ready")
+    task = asyncio.create_task(
+        _run_download(cb, bot, st, kind, rid, value, req)
+    )
+    st.tasks.add(task)
+    task.add_done_callback(st.tasks.discard)
+
+
+async def _run_download(
+    cb: CallbackQuery,
+    bot: Bot,
+    st: BotState,
+    kind: str,
+    rid: str,
+    value: str,
+    req: PendingRequest,
+) -> None:
     workdir = Path(st.settings.download_dir) / rid
     workdir.mkdir(parents=True, exist_ok=True)
     reporter = ProgressReporter(bot, cb.message.chat.id, cb.message.message_id)
     delivered = False
     try:
+        await reporter.set_stage("⏳ Queued…")
         async with st.download_slots:
             await reporter.set_stage("⏬ Downloading…")
             if kind == "dv":
@@ -380,7 +403,11 @@ async def cb_download(cb: CallbackQuery, bot: Bot, st: BotState) -> None:
         except Exception:
             pass
     finally:
-        st.active_users.discard(req.user_id)
+        remaining = st.active.get(req.user_id, 1) - 1
+        if remaining > 0:
+            st.active[req.user_id] = remaining
+        else:
+            st.active.pop(req.user_id, None)
         downloader.cleanup(workdir)
         if delivered:
             try:
