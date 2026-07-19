@@ -1,0 +1,5 @@
+aiogram>=3.15
+yt-dlp>=2025.1.1
+fastapi>=0.115
+uvicorn>=0.30
+python-dotenv>=1.0

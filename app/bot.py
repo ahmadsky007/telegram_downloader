@@ -1,0 +1,327 @@
+import asyncio
+import logging
+import re
+import time
+import uuid
+from collections import deque
+from dataclasses import dataclass, field
+from pathlib import Path
+from urllib.parse import urlparse
+
+from aiogram import Bot, F, Router
+from aiogram.filters import CommandStart
+from aiogram.types import (
+    CallbackQuery,
+    FSInputFile,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
+
+from . import downloader
+from .config import Settings
+
+logger = logging.getLogger(__name__)
+router = Router()
+
+REQUEST_TTL = 900
+UPLOAD_TIMEOUT = 900
+URL_RE = re.compile(r"https?://\S+")
+ALLOWED_HOSTS = ("youtube.com", "youtu.be", "instagram.com")
+
+
+@dataclass
+class PendingRequest:
+    url: str
+    title: str
+    duration: int | None
+    uploader: str | None
+    heights: list[int]
+    user_id: int
+    chat_id: int
+    link_message_id: int
+    created: float = field(default_factory=time.monotonic)
+
+
+class BotState:
+    def __init__(self, settings: Settings):
+        self.settings = settings
+        self.pending: dict[str, PendingRequest] = {}
+        self.history: dict[int, deque] = {}
+        self.active_users: set[int] = set()
+        self.download_slots = asyncio.Semaphore(settings.max_concurrent_downloads)
+
+
+class ProgressReporter:
+    def __init__(self, bot: Bot, chat_id: int, message_id: int):
+        self.bot = bot
+        self.chat_id = chat_id
+        self.message_id = message_id
+        self.loop = asyncio.get_running_loop()
+        self._last_edit = 0.0
+        self._last_text = ""
+
+    def hook(self, d: dict) -> None:
+        status = d.get("status")
+        if status == "downloading":
+            total = d.get("total_bytes") or d.get("total_bytes_estimate")
+            done = d.get("downloaded_bytes")
+            if total and done:
+                pct = int(done * 100 / total // 5 * 5)
+                text = f"⏬ Downloading… {pct}%"
+            else:
+                text = "⏬ Downloading…"
+        elif status in ("finished", "started", "processing"):
+            text = "🔄 Converting…"
+        else:
+            return
+        self._schedule(text)
+
+    def _schedule(self, text: str) -> None:
+        now = time.monotonic()
+        if text == self._last_text:
+            return
+        if "Downloading" in text and now - self._last_edit < 3:
+            return
+        self._last_edit = now
+        self._last_text = text
+        asyncio.run_coroutine_threadsafe(self.set_stage(text), self.loop)
+
+    async def set_stage(self, text: str) -> None:
+        try:
+            await self.bot.edit_message_text(
+                text, chat_id=self.chat_id, message_id=self.message_id
+            )
+        except Exception:
+            pass
+
+
+def extract_url(text: str) -> str | None:
+    match = URL_RE.search(text)
+    if not match:
+        return None
+    url = match.group(0).rstrip(").,")
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return None
+    host = (parsed.hostname or "").lower().removeprefix("www.").removeprefix("m.")
+    if host in ALLOWED_HOSTS or any(host.endswith("." + h) for h in ALLOWED_HOSTS):
+        return url
+    return None
+
+
+def allow_request(st: BotState, user_id: int) -> bool:
+    q = st.history.setdefault(user_id, deque())
+    now = time.monotonic()
+    while q and now - q[0] > 60:
+        q.popleft()
+    if len(q) >= st.settings.max_requests_per_minute:
+        return False
+    q.append(now)
+    return True
+
+
+def prune_pending(st: BotState) -> None:
+    now = time.monotonic()
+    expired = [rid for rid, req in st.pending.items() if now - req.created > REQUEST_TTL]
+    for rid in expired:
+        st.pending.pop(rid, None)
+
+
+def short_error(exc: Exception) -> str:
+    text = str(exc).replace("ERROR: ", "").strip()
+    return text[:200] if text else "unknown error"
+
+
+@router.message(CommandStart())
+async def cmd_start(message: Message) -> None:
+    await message.answer(
+        "👋 Send me a YouTube or Instagram link and I'll download it "
+        "as a video or MP3.\n\nOnly download content you have the right to save."
+    )
+
+
+@router.message(F.text)
+async def handle_link(message: Message, st: BotState) -> None:
+    url = extract_url(message.text or "")
+    if url is None:
+        await message.reply("Please send a valid YouTube or Instagram link.")
+        return
+    if not allow_request(st, message.from_user.id):
+        await message.reply("⏳ Too many requests. Please wait a minute and try again.")
+        return
+    prune_pending(st)
+    status = await message.reply("🔎 Fetching media info…")
+    try:
+        info = await asyncio.to_thread(downloader.probe, url)
+    except Exception as exc:
+        logger.warning("probe failed for %s: %s", url, exc)
+        await status.edit_text(f"❌ Could not read this link.\n{short_error(exc)}")
+        return
+    rid = uuid.uuid4().hex[:10]
+    st.pending[rid] = PendingRequest(
+        url=info["url"],
+        title=info["title"],
+        duration=info["duration"],
+        uploader=info["uploader"],
+        heights=info["heights"],
+        user_id=message.from_user.id,
+        chat_id=message.chat.id,
+        link_message_id=message.message_id,
+    )
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🎬 Video", callback_data=f"v:{rid}"),
+                InlineKeyboardButton(text="🎵 MP3", callback_data=f"a:{rid}"),
+            ],
+            [InlineKeyboardButton(text="✖️ Cancel", callback_data=f"x:{rid}")],
+        ]
+    )
+    await status.edit_text(f"🎞 {info['title']}\n\nDownload as:", reply_markup=keyboard)
+
+
+async def _get_request(cb: CallbackQuery, st: BotState, rid: str) -> PendingRequest | None:
+    req = st.pending.get(rid)
+    if req is None:
+        await cb.answer("This request expired. Send the link again.", show_alert=True)
+        try:
+            await cb.message.delete()
+        except Exception:
+            pass
+        return None
+    if cb.from_user.id != req.user_id:
+        await cb.answer("This request belongs to another user.", show_alert=True)
+        return None
+    return req
+
+
+@router.callback_query(F.data.startswith("x:"))
+async def cb_cancel(cb: CallbackQuery, st: BotState) -> None:
+    rid = cb.data.split(":", 1)[1]
+    req = st.pending.get(rid)
+    if req is not None and cb.from_user.id != req.user_id:
+        await cb.answer("This request belongs to another user.", show_alert=True)
+        return
+    st.pending.pop(rid, None)
+    try:
+        await cb.message.delete()
+    except Exception:
+        pass
+    await cb.answer("Cancelled")
+
+
+@router.callback_query(F.data.startswith("v:"))
+async def cb_video_menu(cb: CallbackQuery, st: BotState) -> None:
+    rid = cb.data.split(":", 1)[1]
+    req = await _get_request(cb, st, rid)
+    if req is None:
+        return
+    buttons = [InlineKeyboardButton(text="⭐ Best available", callback_data=f"dv:{rid}:0")]
+    buttons += [
+        InlineKeyboardButton(text=f"{h}p", callback_data=f"dv:{rid}:{h}")
+        for h in req.heights
+    ]
+    rows = [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
+    rows.append([InlineKeyboardButton(text="✖️ Cancel", callback_data=f"x:{rid}")])
+    await cb.message.edit_text(
+        f"🎞 {req.title}\n\nChoose video quality:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("a:"))
+async def cb_audio_menu(cb: CallbackQuery, st: BotState) -> None:
+    rid = cb.data.split(":", 1)[1]
+    req = await _get_request(cb, st, rid)
+    if req is None:
+        return
+    rows = [
+        [
+            InlineKeyboardButton(text=f"{b} kbps", callback_data=f"da:{rid}:{b}")
+            for b in downloader.AUDIO_BITRATES
+        ],
+        [InlineKeyboardButton(text="✖️ Cancel", callback_data=f"x:{rid}")],
+    ]
+    await cb.message.edit_text(
+        f"🎵 {req.title}\n\nChoose MP3 bitrate:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+    )
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith(("dv:", "da:")))
+async def cb_download(cb: CallbackQuery, bot: Bot, st: BotState) -> None:
+    kind, rid, value = cb.data.split(":", 2)
+    req = await _get_request(cb, st, rid)
+    if req is None:
+        return
+    if cb.from_user.id in st.active_users:
+        await cb.answer("⏳ Wait for your current download to finish.", show_alert=True)
+        return
+    st.pending.pop(rid, None)
+    st.active_users.add(req.user_id)
+    await cb.answer()
+    workdir = Path(st.settings.download_dir) / rid
+    workdir.mkdir(parents=True, exist_ok=True)
+    reporter = ProgressReporter(bot, cb.message.chat.id, cb.message.message_id)
+    delivered = False
+    try:
+        async with st.download_slots:
+            await reporter.set_stage("⏬ Downloading…")
+            if kind == "dv":
+                height = int(value) or None
+                path = await asyncio.to_thread(
+                    downloader.download_video, req.url, workdir, height, reporter.hook
+                )
+            else:
+                path = await asyncio.to_thread(
+                    downloader.download_mp3, req.url, workdir, int(value), reporter.hook
+                )
+        size_mb = path.stat().st_size / 1_000_000
+        if size_mb > st.settings.max_file_size_mb:
+            raise downloader.DownloadError(
+                f"File is {size_mb:.0f} MB, above the {st.settings.max_file_size_mb} MB limit. "
+                "Try a lower quality."
+            )
+        await reporter.set_stage("⬆️ Uploading…")
+        duration = int(req.duration) if req.duration else None
+        if kind == "dv":
+            await bot.send_video(
+                req.chat_id,
+                FSInputFile(path),
+                reply_to_message_id=req.link_message_id,
+                supports_streaming=True,
+                duration=duration,
+                request_timeout=UPLOAD_TIMEOUT,
+            )
+        else:
+            await bot.send_audio(
+                req.chat_id,
+                FSInputFile(path),
+                reply_to_message_id=req.link_message_id,
+                title=req.title,
+                performer=req.uploader,
+                duration=duration,
+                request_timeout=UPLOAD_TIMEOUT,
+            )
+        delivered = True
+    except Exception as exc:
+        logger.exception("download failed for %s", req.url)
+        try:
+            await bot.edit_message_text(
+                f"❌ Failed: {short_error(exc)}",
+                chat_id=cb.message.chat.id,
+                message_id=cb.message.message_id,
+            )
+        except Exception:
+            pass
+    finally:
+        st.active_users.discard(req.user_id)
+        downloader.cleanup(workdir)
+        if delivered:
+            try:
+                await bot.delete_message(cb.message.chat.id, cb.message.message_id)
+            except Exception:
+                pass
