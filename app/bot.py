@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramNetworkError
 from aiogram.filters import CommandStart
 from aiogram.types import (
     CallbackQuery,
@@ -372,25 +373,33 @@ async def _run_download(
             )
         await reporter.set_stage("⬆️ Uploading…")
         duration = int(req.duration) if req.duration else None
-        if kind == "dv":
-            await bot.send_video(
-                req.chat_id,
-                FSInputFile(path),
-                reply_to_message_id=req.link_message_id,
-                supports_streaming=True,
-                duration=duration,
-                request_timeout=UPLOAD_TIMEOUT,
-            )
-        else:
-            await bot.send_audio(
-                req.chat_id,
-                FSInputFile(path),
-                reply_to_message_id=req.link_message_id,
-                title=req.title,
-                performer=req.uploader,
-                duration=duration,
-                request_timeout=UPLOAD_TIMEOUT,
-            )
+        for attempt in range(2):
+            try:
+                if kind == "dv":
+                    await bot.send_video(
+                        req.chat_id,
+                        FSInputFile(path),
+                        reply_to_message_id=req.link_message_id,
+                        supports_streaming=True,
+                        duration=duration,
+                        request_timeout=UPLOAD_TIMEOUT,
+                    )
+                else:
+                    await bot.send_audio(
+                        req.chat_id,
+                        FSInputFile(path),
+                        reply_to_message_id=req.link_message_id,
+                        title=req.title,
+                        performer=req.uploader,
+                        duration=duration,
+                        request_timeout=UPLOAD_TIMEOUT,
+                    )
+                break
+            except TelegramNetworkError:
+                if attempt:
+                    raise
+                logger.warning("upload failed for %s, retrying", req.url)
+                await asyncio.sleep(3)
         delivered = True
     except Exception as exc:
         logger.exception("download failed for %s", req.url)
