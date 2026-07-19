@@ -88,9 +88,12 @@ def probe(url: str) -> dict:
 
 def download_video(url: str, workdir: Path, height: int | None, hook: Callable) -> Path:
     if height is None:
-        fmt = "bv*+ba/b"
+        fmt = "bv*[vcodec^=avc1]+ba[ext=m4a]/bv*+ba/b"
     else:
-        fmt = f"bv*[height<={height}]+ba/b[height<={height}]/b"
+        fmt = (
+            f"bv*[vcodec^=avc1][height<={height}]+ba[ext=m4a]/"
+            f"bv*[height<={height}]+ba/b[height<={height}]/b"
+        )
     opts = _base_opts(workdir) | {
         "format": fmt,
         "merge_output_format": "mp4",
