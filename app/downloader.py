@@ -34,18 +34,54 @@ def probe(url: str) -> dict:
         if not entries:
             raise DownloadError("No downloadable media found at this link.")
         info = entries[0]
+    formats = info.get("formats", [])
     heights = {
         f["height"]
-        for f in info.get("formats", [])
+        for f in formats
         if f.get("vcodec") not in (None, "none") and f.get("height")
     }
     available = [h for h in STANDARD_HEIGHTS if heights and h <= max(heights)]
+    audio_sizes = [
+        f.get("filesize") or f.get("filesize_approx") or 0
+        for f in formats
+        if f.get("acodec") not in (None, "none") and f.get("vcodec") in (None, "none")
+    ]
+    audio_size = max(audio_sizes, default=0)
+    sizes: dict[int, int | None] = {}
+    for h in available:
+        video_height = max((fh for fh in heights if fh <= h), default=None)
+        candidates = [
+            f.get("filesize") or f.get("filesize_approx") or 0
+            for f in formats
+            if f.get("height") == video_height and f.get("vcodec") not in (None, "none")
+        ]
+        total = max(candidates, default=0) + audio_size
+        sizes[h] = total or None
+    combined = [
+        f
+        for f in formats
+        if f.get("vcodec") not in (None, "none")
+        and f.get("acodec") not in (None, "none")
+        and f.get("url")
+        and f.get("protocol") in ("http", "https")
+        and f.get("height")
+    ]
+    direct = None
+    if combined:
+        best = max(combined, key=lambda f: f["height"])
+        direct = {
+            "url": best["url"],
+            "height": best["height"],
+            "ext": best.get("ext") or "mp4",
+        }
     return {
         "title": info.get("title") or "media",
         "duration": info.get("duration"),
         "uploader": info.get("uploader"),
         "url": info.get("webpage_url") or url,
         "heights": available,
+        "sizes": sizes,
+        "direct": direct,
     }
 
 

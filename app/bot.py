@@ -1,4 +1,5 @@
 import asyncio
+import html
 import logging
 import re
 import time
@@ -37,6 +38,8 @@ class PendingRequest:
     duration: int | None
     uploader: str | None
     heights: list[int]
+    sizes: dict[int, int | None]
+    direct: dict | None
     user_id: int
     chat_id: int
     link_message_id: int
@@ -128,6 +131,12 @@ def prune_pending(st: BotState) -> None:
         st.pending.pop(rid, None)
 
 
+def size_label(size: int | None) -> str:
+    if not size:
+        return ""
+    return f" · ~{size / 1_000_000:.0f} MB"
+
+
 def short_error(exc: Exception) -> str:
     text = str(exc).replace("ERROR: ", "").strip()
     return text[:200] if text else "unknown error"
@@ -165,6 +174,8 @@ async def handle_link(message: Message, st: BotState) -> None:
         duration=info["duration"],
         uploader=info["uploader"],
         heights=info["heights"],
+        sizes=info["sizes"],
+        direct=info["direct"],
         user_id=message.from_user.id,
         chat_id=message.chat.id,
         link_message_id=message.message_id,
@@ -217,9 +228,16 @@ async def cb_video_menu(cb: CallbackQuery, st: BotState) -> None:
     req = await _get_request(cb, st, rid)
     if req is None:
         return
-    buttons = [InlineKeyboardButton(text="⭐ Best available", callback_data=f"dv:{rid}:0")]
+    best_size = req.sizes.get(req.heights[0]) if req.heights else None
+    buttons = [
+        InlineKeyboardButton(
+            text=f"⭐ Best{size_label(best_size)}", callback_data=f"dv:{rid}:0"
+        )
+    ]
     buttons += [
-        InlineKeyboardButton(text=f"{h}p", callback_data=f"dv:{rid}:{h}")
+        InlineKeyboardButton(
+            text=f"{h}p{size_label(req.sizes.get(h))}", callback_data=f"dv:{rid}:{h}"
+        )
         for h in req.heights
     ]
     rows = [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
@@ -239,7 +257,10 @@ async def cb_audio_menu(cb: CallbackQuery, st: BotState) -> None:
         return
     rows = [
         [
-            InlineKeyboardButton(text=f"{b} kbps", callback_data=f"da:{rid}:{b}")
+            InlineKeyboardButton(
+                text=f"{b} kbps{size_label(int(req.duration * b * 125) if req.duration else None)}",
+                callback_data=f"da:{rid}:{b}",
+            )
             for b in downloader.AUDIO_BITRATES
         ],
         [InlineKeyboardButton(text="✖️ Cancel", callback_data=f"x:{rid}")],
@@ -251,6 +272,36 @@ async def cb_audio_menu(cb: CallbackQuery, st: BotState) -> None:
     await cb.answer()
 
 
+async def send_direct_link(
+    cb: CallbackQuery, st: BotState, req: PendingRequest, est: int
+) -> None:
+    title = html.escape(req.title)
+    est_mb = est / 1_000_000
+    if req.direct is None:
+        await cb.message.edit_text(
+            f"🎞 {title}\n\n📦 Estimated ~{est_mb:.0f} MB — above my "
+            f"{st.settings.max_file_size_mb} MB send limit, and no direct link is "
+            "available for this quality. Please pick a lower quality."
+        )
+        return
+    link = req.direct["url"]
+    label = f"{req.direct['height']}p {req.direct['ext'].upper()}"
+    note = ""
+    if req.direct["height"] < 720:
+        note = (
+            "\n\nℹ️ Higher qualities aren't available as a single direct file on this "
+            "platform — the bot can only deliver them itself."
+        )
+    await cb.message.edit_text(
+        f"🎞 {title}\n\n📦 Estimated ~{est_mb:.0f} MB — too big for me to send "
+        f"(limit {st.settings.max_file_size_mb} MB), so here's an instant direct "
+        f"link instead (expires in a few hours):\n\n"
+        f'⬇️ <a href="{link}">Download {label}</a>{note}',
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
+
+
 @router.callback_query(F.data.startswith(("dv:", "da:")))
 async def cb_download(cb: CallbackQuery, bot: Bot, st: BotState) -> None:
     kind, rid, value = cb.data.split(":", 2)
@@ -260,6 +311,17 @@ async def cb_download(cb: CallbackQuery, bot: Bot, st: BotState) -> None:
     if cb.from_user.id in st.active_users:
         await cb.answer("⏳ Wait for your current download to finish.", show_alert=True)
         return
+    limit_bytes = st.settings.max_file_size_mb * 1_000_000
+    if kind == "dv":
+        height = int(value) or None
+        est = req.sizes.get(height) if height else (
+            req.sizes.get(req.heights[0]) if req.heights else None
+        )
+        if est and est > limit_bytes:
+            st.pending.pop(rid, None)
+            await cb.answer()
+            await send_direct_link(cb, st, req, est)
+            return
     st.pending.pop(rid, None)
     st.active_users.add(req.user_id)
     await cb.answer()
