@@ -6,7 +6,8 @@ from typing import Callable
 
 import yt_dlp
 
-STANDARD_HEIGHTS = (2160, 1440, 1080, 720, 480, 360)
+STANDARD_HEIGHTS = (1080, 720, 480, 360)
+MAX_HEIGHT = 1080
 AUDIO_BITRATES = (320, 192, 128)
 
 
@@ -89,24 +90,12 @@ def probe(url: str) -> dict:
 
 
 def download_video(url: str, workdir: Path, height: int | None, hook: Callable) -> Path:
-    if height is None:
-        fmt = (
-            "bv*[height>1080][vcodec!^=av01]+ba[ext=m4a]/"
-            "bv*[vcodec^=avc1]+ba[ext=m4a]/"
-            "bv*[vcodec!^=av01]+ba/bv*+ba/b"
-        )
-    elif height <= 1080:
-        fmt = (
-            f"bv*[vcodec^=avc1][height<={height}]+ba[ext=m4a]/"
-            f"bv*[height<={height}][vcodec!^=av01]+ba/"
-            f"bv*[height<={height}]+ba/b[height<={height}]/b"
-        )
-    else:
-        fmt = (
-            f"bv*[height<={height}][height>1080][vcodec!^=av01]+ba[ext=m4a]/"
-            f"bv*[vcodec^=avc1]+ba[ext=m4a]/"
-            f"bv*[height<={height}]+ba/b"
-        )
+    height = min(height or MAX_HEIGHT, MAX_HEIGHT)
+    fmt = (
+        f"bv*[vcodec^=avc1][height<={height}]+ba[ext=m4a]/"
+        f"bv*[height<={height}][vcodec!^=av01]+ba/"
+        f"bv*[height<={height}]+ba/b[height<={height}]/b"
+    )
     opts = _base_opts(workdir) | {
         "format": fmt,
         "merge_output_format": "mp4",
