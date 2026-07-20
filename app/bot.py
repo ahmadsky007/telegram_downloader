@@ -373,6 +373,11 @@ async def _run_download(
             )
         await reporter.set_stage("⬆️ Uploading…")
         duration = int(req.duration) if req.duration else None
+        meta = (
+            await asyncio.to_thread(downloader.video_meta, path)
+            if kind == "dv"
+            else {}
+        )
         for attempt in range(2):
             try:
                 if kind == "dv":
@@ -382,6 +387,8 @@ async def _run_download(
                         reply_to_message_id=req.link_message_id,
                         supports_streaming=True,
                         duration=duration,
+                        width=meta.get("width"),
+                        height=meta.get("height"),
                         request_timeout=UPLOAD_TIMEOUT,
                     )
                 else:

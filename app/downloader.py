@@ -1,4 +1,6 @@
+import json
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Callable
 
@@ -133,6 +135,30 @@ def download_mp3(url: str, workdir: Path, bitrate: int, hook: Callable) -> Path:
     with yt_dlp.YoutubeDL(opts) as ydl:
         ydl.extract_info(url, download=True)
     return _find_output(workdir, (".mp3",))
+
+
+def video_meta(path: Path) -> dict:
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
+            "-show_streams",
+            "-select_streams",
+            "v:0",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    try:
+        stream = json.loads(result.stdout)["streams"][0]
+        return {"width": stream.get("width"), "height": stream.get("height")}
+    except (KeyError, IndexError, json.JSONDecodeError):
+        return {}
 
 
 def _find_output(workdir: Path, exts: tuple[str, ...]) -> Path:
