@@ -1,6 +1,6 @@
 # Telegram Media Downloader Bot
 
-Send the bot a YouTube or Instagram link → pick **Video** (with quality menu) or **MP3** (with bitrate menu) → receive the file. The bot cleans up after itself: temp files are deleted and all intermediate menus/progress messages are removed, leaving only your link and the delivered media.
+Send the bot a YouTube, Instagram, X/Twitter, TikTok, Reddit, Facebook or Pinterest link → pick **Video** (with quality menu) or **MP3** (with bitrate menu) → receive the file. The bot cleans up after itself: temp files are deleted and all intermediate menus/progress messages are removed, leaving only your link and the delivered media.
 
 Built with Python, [aiogram 3](https://docs.aiogram.dev/), FastAPI, [yt-dlp](https://github.com/yt-dlp/yt-dlp), and FFmpeg.
 

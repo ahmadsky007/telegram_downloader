@@ -30,7 +30,20 @@ REQUEST_TTL = 900
 UPLOAD_TIMEOUT = 900
 MAX_ACTIVE_PER_USER = 3
 URL_RE = re.compile(r"https?://\S+")
-ALLOWED_HOSTS = ("youtube.com", "youtu.be", "instagram.com")
+ALLOWED_HOSTS = (
+    "youtube.com",
+    "youtu.be",
+    "instagram.com",
+    "x.com",
+    "twitter.com",
+    "tiktok.com",
+    "reddit.com",
+    "redd.it",
+    "facebook.com",
+    "fb.watch",
+    "pinterest.com",
+    "pin.it",
+)
 
 
 @dataclass
@@ -148,8 +161,9 @@ def short_error(exc: Exception) -> str:
 @router.message(CommandStart())
 async def cmd_start(message: Message) -> None:
     await message.answer(
-        "👋 Send me a YouTube or Instagram link and I'll download it "
-        "as a video or MP3.\n\nOnly download content you have the right to save."
+        "👋 Send me a YouTube, Instagram, X, TikTok, Reddit, Facebook or "
+        "Pinterest link and I'll download it as a video or MP3.\n\n"
+        "Only download content you have the right to save."
     )
 
 
@@ -157,7 +171,10 @@ async def cmd_start(message: Message) -> None:
 async def handle_link(message: Message, st: BotState) -> None:
     url = extract_url(message.text or "")
     if url is None:
-        await message.reply("Please send a valid YouTube or Instagram link.")
+        await message.reply(
+            "Please send a valid YouTube, Instagram, X, TikTok, Reddit, "
+            "Facebook or Pinterest link."
+        )
         return
     if not allow_request(st, message.from_user.id):
         await message.reply("⏳ Too many requests. Please wait a minute and try again.")

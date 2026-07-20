@@ -1,5 +1,6 @@
 aiogram>=3.15
 yt-dlp>=2025.1.1
+curl_cffi>=0.7
 fastapi>=0.115
 uvicorn>=0.30
 python-dotenv>=1.0

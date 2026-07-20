@@ -89,17 +89,25 @@ def probe(url: str) -> dict:
     }
 
 
-def download_video(url: str, workdir: Path, height: int | None, hook: Callable) -> Path:
+def video_format(height: int | None) -> str:
     height = min(height or MAX_HEIGHT, MAX_HEIGHT)
-    fmt = (
-        f"bv*[vcodec~='^(avc1|h264)'][height<={height}]+ba[ext=m4a]/"
-        f"bv*[vcodec~='^(avc1|h264)'][height<={height}]+ba/"
-        f"b[height<={height}]/"
+    long_side = -(-height * 16 // 9)
+    h264 = "vcodec~='^(avc1|h264)'"
+    dims = f"[width<={long_side}][height<={long_side}]"
+    return (
+        f"bv*[{h264}]{dims}+ba[ext=m4a]/"
+        f"bv*[{h264}]{dims}+ba/"
+        f"b[{h264}]{dims}/"
+        f"b[{h264}]/"
+        f"b{dims}/"
         f"b/"
-        f"bv*[height<={height}]+ba"
+        f"bv*{dims}+ba"
     )
+
+
+def download_video(url: str, workdir: Path, height: int | None, hook: Callable) -> Path:
     opts = _base_opts(workdir) | {
-        "format": fmt,
+        "format": video_format(height),
         "merge_output_format": "mp4",
         "progress_hooks": [hook],
         "postprocessor_hooks": [hook],
