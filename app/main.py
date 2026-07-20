@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -28,7 +29,9 @@ def build_bot(settings: Settings) -> Bot:
 
 
 def build_dispatcher(settings: Settings) -> Dispatcher:
-    Path(settings.download_dir).mkdir(parents=True, exist_ok=True)
+    download_dir = Path(settings.download_dir)
+    shutil.rmtree(download_dir, ignore_errors=True)
+    download_dir.mkdir(parents=True, exist_ok=True)
     dp = Dispatcher()
     dp.include_router(router)
     dp["st"] = BotState(settings)

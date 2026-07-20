@@ -9,6 +9,11 @@ services:
       - "8081:8081"
     volumes:
       - telegram-bot-api-data:/var/lib/telegram-bot-api
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   bot:
     build: .
@@ -20,6 +25,11 @@ services:
       TELEGRAM_API_URL: http://telegram-bot-api:8081
     depends_on:
       - telegram-bot-api
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   telegram-bot-api-data:
