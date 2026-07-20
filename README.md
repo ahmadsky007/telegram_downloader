@@ -63,4 +63,4 @@ User → Telegram → (local Bot API server, optional) → bot (aiogram)
 
 - Official Bot API caps bot uploads at 50 MB; the local Bot API server raises this to 2 GB.
 - One active download per user; menus expire after 15 minutes.
-- Playlists are not expanded — only the first/linked item is downloaded.
+- Playlists are not expanded only the first/linked item is downloaded.
