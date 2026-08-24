@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -15,6 +16,19 @@ class DownloadError(Exception):
     pass
 
 
+def _find_js_runtime() -> dict:
+    for runtime in ("node", "deno", "bun", "quickjs"):
+        path = shutil.which(runtime)
+        if path:
+            return {runtime: {"path": path}}
+    nvm_node = Path.home() / ".nvm/versions/node"
+    if nvm_node.exists():
+        node_bins = list(nvm_node.glob("*/bin/node"))
+        if node_bins:
+            return {"node": {"path": str(sorted(node_bins)[-1])}}
+    return {}
+
+
 def _base_opts(workdir: Path | None = None) -> dict:
     opts: dict = {
         "quiet": True,
@@ -24,7 +38,31 @@ def _base_opts(workdir: Path | None = None) -> dict:
         "socket_timeout": 30,
         "retries": 3,
         "concurrent_fragment_downloads": 4,
+        "geo_bypass": True,
+        "remote_components": ["ejs:github"],
+        "http_headers": {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/133.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Sec-Fetch-Mode": "navigate",
+        },
     }
+    js_runtime = _find_js_runtime()
+    if js_runtime:
+        opts["js_runtimes"] = js_runtime
+
+    cookie_file = (
+        os.environ.get("COOKIE_FILE")
+        or os.environ.get("COOKIES_FILE")
+        or ("cookies.txt" if Path("cookies.txt").is_file() else None)
+    )
+    if cookie_file and Path(cookie_file).is_file():
+        opts["cookiefile"] = str(cookie_file)
+
     if workdir is not None:
         opts["outtmpl"] = str(workdir / "%(title).80B [%(id)s].%(ext)s")
     return opts

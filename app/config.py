@@ -13,9 +13,14 @@ class Settings:
     max_concurrent_downloads: int
     max_requests_per_minute: int
     max_file_size_mb: int
+    cookie_file: str | None
 
 
 def load_settings() -> Settings:
+    cookie_file = os.environ.get("COOKIE_FILE") or os.environ.get("COOKIES_FILE")
+    if not cookie_file and os.path.exists("cookies.txt"):
+        cookie_file = "cookies.txt"
+
     return Settings(
         bot_token=os.environ["BOT_TOKEN"],
         telegram_api_url=os.environ.get("TELEGRAM_API_URL") or None,
@@ -26,4 +31,5 @@ def load_settings() -> Settings:
         max_concurrent_downloads=int(os.environ.get("MAX_CONCURRENT_DOWNLOADS", "3")),
         max_requests_per_minute=int(os.environ.get("MAX_REQUESTS_PER_MINUTE", "5")),
         max_file_size_mb=int(os.environ.get("MAX_FILE_SIZE_MB", "1900")),
+        cookie_file=cookie_file,
     )

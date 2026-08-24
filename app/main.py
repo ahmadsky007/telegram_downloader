@@ -11,6 +11,8 @@ from aiogram.types import Update
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 
+import sys
+
 from .bot import BotState, router
 from .config import Settings, load_settings
 
@@ -19,6 +21,32 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+
+async def auto_update_ytdlp_loop() -> None:
+    while True:
+        try:
+            logger.info("Running automatic yt-dlp update check...")
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--upgrade",
+                "yt-dlp",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            if proc.returncode == 0:
+                logger.info("yt-dlp auto-update check finished: %s", stdout.decode().strip().splitlines()[-1] if stdout else "OK")
+            else:
+                logger.warning("yt-dlp auto-update check warning: %s", stderr.decode().strip())
+        except Exception as exc:
+            logger.warning("yt-dlp auto-updater encountered error: %s", exc)
+
+        # Check every 24 hours
+        await asyncio.sleep(86400)
 
 
 def build_bot(settings: Settings) -> Bot:
@@ -46,6 +74,7 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.bot = bot
     app.state.dp = dp
+    updater_task = asyncio.create_task(auto_update_ytdlp_loop())
     if settings.bot_mode == "webhook":
         if not settings.webhook_url:
             raise RuntimeError("WEBHOOK_URL is required in webhook mode")
@@ -56,6 +85,7 @@ async def lifespan(app: FastAPI):
         )
         logger.info("webhook set to %s/webhook", settings.webhook_url)
     yield
+    updater_task.cancel()
     await bot.session.close()
 
 
@@ -82,9 +112,13 @@ async def run_polling() -> None:
     settings = load_settings()
     bot = build_bot(settings)
     dp = build_dispatcher(settings)
+    updater_task = asyncio.create_task(auto_update_ytdlp_loop())
     await bot.delete_webhook(drop_pending_updates=True)
     logger.info("starting polling")
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        updater_task.cancel()
 
 
 if __name__ == "__main__":
