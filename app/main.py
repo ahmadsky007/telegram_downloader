@@ -75,6 +75,7 @@ async def lifespan(app: FastAPI):
     app.state.bot = bot
     app.state.dp = dp
     updater_task = asyncio.create_task(auto_update_ytdlp_loop())
+    polling_task = None
     if settings.bot_mode == "webhook":
         if not settings.webhook_url:
             raise RuntimeError("WEBHOOK_URL is required in webhook mode")
@@ -84,8 +85,14 @@ async def lifespan(app: FastAPI):
             drop_pending_updates=True,
         )
         logger.info("webhook set to %s/webhook", settings.webhook_url)
+    else:
+        await bot.delete_webhook(drop_pending_updates=True)
+        polling_task = asyncio.create_task(dp.start_polling(bot))
+        logger.info("polling started in background")
     yield
     updater_task.cancel()
+    if polling_task:
+        polling_task.cancel()
     await bot.session.close()
 
 
