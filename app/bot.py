@@ -46,6 +46,9 @@ ALLOWED_HOSTS = (
 )
 
 
+import json
+from dataclasses import asdict, dataclass, field
+
 @dataclass
 class PendingRequest:
     url: str
@@ -58,7 +61,7 @@ class PendingRequest:
     user_id: int
     chat_id: int
     link_message_id: int
-    created: float = field(default_factory=time.monotonic)
+    created: float = field(default_factory=time.time)
 
 
 class BotState:
@@ -69,6 +72,49 @@ class BotState:
         self.active: dict[int, int] = {}
         self.tasks: set[asyncio.Task] = set()
         self.download_slots = asyncio.Semaphore(settings.max_concurrent_downloads)
+        self.storage_file = Path("/tmp/media_bot_pending.json")
+        self._load_pending()
+
+    def _load_pending(self) -> None:
+        try:
+            if self.storage_file.exists():
+                data = json.loads(self.storage_file.read_text())
+                now = time.time()
+                for rid, req_data in data.items():
+                    if now - req_data.get("created", 0) <= REQUEST_TTL:
+                        raw_sizes = req_data.get("sizes", {})
+                        req_data["sizes"] = {int(k): v for k, v in raw_sizes.items()}
+                        self.pending[rid] = PendingRequest(**req_data)
+        except Exception as e:
+            logger.warning("Could not load persistent pending state: %s", e)
+
+    def save_pending(self) -> None:
+        try:
+            now = time.time()
+            data = {}
+            for rid, req in list(self.pending.items()):
+                if now - req.created <= REQUEST_TTL:
+                    data[rid] = asdict(req)
+            self.storage_file.parent.mkdir(parents=True, exist_ok=True)
+            self.storage_file.write_text(json.dumps(data))
+        except Exception as e:
+            logger.warning("Could not save persistent pending state: %s", e)
+
+    def set_request(self, rid: str, req: PendingRequest) -> None:
+        self.pending[rid] = req
+        self.save_pending()
+
+    def get_request(self, rid: str) -> PendingRequest | None:
+        req = self.pending.get(rid)
+        if req is None:
+            self._load_pending()
+            req = self.pending.get(rid)
+        return req
+
+    def pop_request(self, rid: str) -> PendingRequest | None:
+        req = self.pending.pop(rid, None)
+        self.save_pending()
+        return req
 
 
 class ProgressReporter:
@@ -141,10 +187,12 @@ def allow_request(st: BotState, user_id: int) -> bool:
 
 
 def prune_pending(st: BotState) -> None:
-    now = time.monotonic()
-    expired = [rid for rid, req in st.pending.items() if now - req.created > REQUEST_TTL]
-    for rid in expired:
-        st.pending.pop(rid, None)
+    now = time.time()
+    expired = [rid for rid, req in list(st.pending.items()) if now - req.created > REQUEST_TTL]
+    if expired:
+        for rid in expired:
+            st.pending.pop(rid, None)
+        st.save_pending()
 
 
 def size_label(size: int | None) -> str:
@@ -188,17 +236,20 @@ async def handle_link(message: Message, st: BotState) -> None:
         await status.edit_text(f"❌ Could not read this link.\n{short_error(exc)}")
         return
     rid = uuid.uuid4().hex[:10]
-    st.pending[rid] = PendingRequest(
-        url=info["url"],
-        title=info["title"],
-        duration=info["duration"],
-        uploader=info["uploader"],
-        heights=info["heights"],
-        sizes=info["sizes"],
-        direct=info["direct"],
-        user_id=message.from_user.id,
-        chat_id=message.chat.id,
-        link_message_id=message.message_id,
+    st.set_request(
+        rid,
+        PendingRequest(
+            url=info["url"],
+            title=info["title"],
+            duration=info["duration"],
+            uploader=info["uploader"],
+            heights=info["heights"],
+            sizes=info["sizes"],
+            direct=info["direct"],
+            user_id=message.from_user.id,
+            chat_id=message.chat.id,
+            link_message_id=message.message_id,
+        ),
     )
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -213,7 +264,7 @@ async def handle_link(message: Message, st: BotState) -> None:
 
 
 async def _get_request(cb: CallbackQuery, st: BotState, rid: str) -> PendingRequest | None:
-    req = st.pending.get(rid)
+    req = st.get_request(rid)
     if req is None:
         await cb.answer("This request expired. Send the link again.", show_alert=True)
         try:
@@ -230,11 +281,11 @@ async def _get_request(cb: CallbackQuery, st: BotState, rid: str) -> PendingRequ
 @router.callback_query(F.data.startswith("x:"))
 async def cb_cancel(cb: CallbackQuery, st: BotState) -> None:
     rid = cb.data.split(":", 1)[1]
-    req = st.pending.get(rid)
+    req = st.get_request(rid)
     if req is not None and cb.from_user.id != req.user_id:
         await cb.answer("This request belongs to another user.", show_alert=True)
         return
-    st.pending.pop(rid, None)
+    st.pop_request(rid)
     try:
         await cb.message.delete()
     except Exception:
@@ -342,11 +393,11 @@ async def cb_download(cb: CallbackQuery, bot: Bot, st: BotState) -> None:
             req.sizes.get(req.heights[0]) if req.heights else None
         )
         if est and est > limit_bytes:
-            st.pending.pop(rid, None)
+            st.pop_request(rid)
             await cb.answer()
             await send_direct_link(cb, st, req, est)
             return
-    st.pending.pop(rid, None)
+    st.pop_request(rid)
     st.active[req.user_id] = st.active.get(req.user_id, 0) + 1
     await cb.answer("Started — the file will arrive when it's ready")
     task = asyncio.create_task(

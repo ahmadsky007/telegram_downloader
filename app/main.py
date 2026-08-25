@@ -58,7 +58,6 @@ def build_bot(settings: Settings) -> Bot:
 
 def build_dispatcher(settings: Settings) -> Dispatcher:
     download_dir = Path(settings.download_dir)
-    shutil.rmtree(download_dir, ignore_errors=True)
     download_dir.mkdir(parents=True, exist_ok=True)
     dp = Dispatcher()
     dp.include_router(router)
