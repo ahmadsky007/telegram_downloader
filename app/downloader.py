@@ -46,7 +46,7 @@ def _base_opts(workdir: Path | None = None) -> dict:
         "remote_components": ["ejs:github"],
         "extractor_args": {
             "youtube": {
-                "player_client": ["web", "mweb", "android", "ios"],
+                "player_client": ["android", "ios", "mweb", "web"],
             }
         },
         "http_headers": {
