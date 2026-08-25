@@ -47,7 +47,7 @@ def _base_opts(workdir: Path | None = None) -> dict:
         },
         "http_headers": {
             "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/133.0.0.0 Safari/537.36"
             ),
@@ -71,6 +71,7 @@ def _base_opts(workdir: Path | None = None) -> dict:
     cookie_file = (
         os.environ.get("COOKIE_FILE")
         or os.environ.get("COOKIES_FILE")
+        or ("/etc/secrets/cookies.txt" if Path("/etc/secrets/cookies.txt").is_file() else None)
         or ("/tmp/cookies.txt" if Path("/tmp/cookies.txt").is_file() else None)
         or ("cookies.txt" if Path("cookies.txt").is_file() else None)
     )
