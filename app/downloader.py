@@ -17,10 +17,14 @@ class DownloadError(Exception):
 
 
 def _find_js_runtime() -> dict:
-    for runtime in ("node", "deno", "bun", "quickjs"):
+    for runtime in ("node", "nodejs", "deno", "bun", "quickjs"):
         path = shutil.which(runtime)
         if path:
-            return {runtime: {"path": path}}
+            name = "node" if runtime in ("node", "nodejs") else runtime
+            return {name: {"path": path}}
+    for common_path in ("/usr/bin/node", "/usr/bin/nodejs", "/usr/local/bin/node"):
+        if Path(common_path).is_file():
+            return {"node": {"path": common_path}}
     nvm_node = Path.home() / ".nvm/versions/node"
     if nvm_node.exists():
         node_bins = list(nvm_node.glob("*/bin/node"))
