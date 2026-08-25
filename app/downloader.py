@@ -40,6 +40,11 @@ def _base_opts(workdir: Path | None = None) -> dict:
         "concurrent_fragment_downloads": 4,
         "geo_bypass": True,
         "remote_components": ["ejs:github"],
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["web", "mweb", "web_safari"],
+            }
+        },
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
