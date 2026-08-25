@@ -60,23 +60,34 @@ def _base_opts(workdir: Path | None = None) -> dict:
     if js_runtime:
         opts["js_runtimes"] = js_runtime
 
-    cookies_data = os.environ.get("COOKIES_DATA") or os.environ.get("YOUTUBE_COOKIES")
-    if cookies_data:
+    cookie_source = None
+    for candidate in (
+        os.environ.get("COOKIE_FILE"),
+        os.environ.get("COOKIES_FILE"),
+        "/etc/secrets/cookies.txt",
+        "cookies.txt",
+    ):
+        if candidate and Path(candidate).is_file():
+            cookie_source = Path(candidate)
+            break
+
+    target_cookie = Path("/tmp/media_bot_cookies.txt")
+    if cookie_source:
         try:
-            tmp_cookie = Path("/tmp/cookies.txt")
-            tmp_cookie.write_text(cookies_data.strip())
+            shutil.copyfile(cookie_source, target_cookie)
+            target_cookie.chmod(0o600)
+            opts["cookiefile"] = str(target_cookie)
+        except Exception:
+            opts["cookiefile"] = str(cookie_source)
+    elif os.environ.get("COOKIES_DATA") or os.environ.get("YOUTUBE_COOKIES"):
+        try:
+            data = (os.environ.get("COOKIES_DATA") or os.environ.get("YOUTUBE_COOKIES") or "").strip()
+            if data:
+                target_cookie.write_text(data)
+                target_cookie.chmod(0o600)
+                opts["cookiefile"] = str(target_cookie)
         except Exception:
             pass
-
-    cookie_file = (
-        os.environ.get("COOKIE_FILE")
-        or os.environ.get("COOKIES_FILE")
-        or ("/etc/secrets/cookies.txt" if Path("/etc/secrets/cookies.txt").is_file() else None)
-        or ("/tmp/cookies.txt" if Path("/tmp/cookies.txt").is_file() else None)
-        or ("cookies.txt" if Path("cookies.txt").is_file() else None)
-    )
-    if cookie_file and Path(cookie_file).is_file():
-        opts["cookiefile"] = str(cookie_file)
 
     proxy = os.environ.get("PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY")
     if proxy:
