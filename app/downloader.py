@@ -8,6 +8,12 @@ from typing import Callable
 
 import yt_dlp
 
+try:
+    from yt_dlp.plugins import load_all_plugins
+    load_all_plugins()
+except Exception:
+    pass
+
 STANDARD_HEIGHTS = (1080, 720, 480, 360)
 MAX_HEIGHT = 1080
 AUDIO_BITRATES = (320, 192, 128)
@@ -46,9 +52,12 @@ def _base_opts(workdir: Path | None = None) -> dict:
         "geo_bypass": True,
         "remote_components": ["ejs:github"],
         "extractor_args": {
+            "youtubepot-bgutilhttp": {
+                "base_url": ["http://127.0.0.1:4416"],
+            },
             "youtube": {
-                "player_client": ["android", "ios", "mweb", "web"],
-            }
+                "player_client": ["web", "mweb", "tv", "android", "ios"],
+            },
         },
         "http_headers": {
             "User-Agent": (
