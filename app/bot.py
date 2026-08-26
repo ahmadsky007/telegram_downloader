@@ -203,7 +203,9 @@ def size_label(size: int | None) -> str:
 
 def short_error(exc: Exception) -> str:
     text = str(exc).replace("ERROR: ", "").strip()
-    return text[:200] if text else "unknown error"
+    if not text:
+        text = f"{type(exc).__name__}: {repr(exc)}"
+    return text[:300]
 
 
 @router.message(CommandStart())
@@ -232,7 +234,7 @@ async def handle_link(message: Message, st: BotState) -> None:
     try:
         info = await asyncio.to_thread(downloader.probe, url)
     except Exception as exc:
-        logger.warning("probe failed for %s: %s", url, exc)
+        logger.exception("probe failed for %s: %r", url, exc)
         await status.edit_text(f"❌ Could not read this link.\n{short_error(exc)}")
         return
     rid = uuid.uuid4().hex[:10]
