@@ -50,7 +50,7 @@ fi
 # ── 2. Start PO Token provider (BotGuard attestation) ──
 if [ -f /usr/local/bin/bgutil-pot ]; then
     echo "[entrypoint] Starting PO Token provider on :4416..."
-    /usr/local/bin/bgutil-pot server --port 4416 &
+    /usr/local/bin/bgutil-pot server --host 0.0.0.0 --port 4416 &
     POT_PID=$!
     sleep 2
     # Quick health check

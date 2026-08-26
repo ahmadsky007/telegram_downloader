@@ -55,19 +55,6 @@ def _base_opts(workdir: Path | None = None) -> dict:
             "youtubepot-bgutilhttp": {
                 "base_url": ["http://127.0.0.1:4416"],
             },
-            "youtube": {
-                "player_client": ["web", "mweb", "tv", "android", "ios"],
-            },
-        },
-        "http_headers": {
-            "User-Agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/133.0.0.0 Safari/537.36"
-            ),
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Sec-Fetch-Mode": "navigate",
         },
     }
     js_runtime = _find_js_runtime()
