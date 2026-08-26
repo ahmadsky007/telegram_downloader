@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import socket
 import subprocess
 from pathlib import Path
 from typing import Callable
@@ -44,9 +45,10 @@ def _base_opts(workdir: Path | None = None) -> dict:
         "concurrent_fragment_downloads": 4,
         "geo_bypass": True,
         "remote_components": ["ejs:github"],
+        "impersonate": "chrome",
         "extractor_args": {
             "youtube": {
-                "player_client": ["android", "ios", "mweb", "web"],
+                "player_client": ["default"],
             }
         },
         "http_headers": {
@@ -94,6 +96,14 @@ def _base_opts(workdir: Path | None = None) -> dict:
             pass
 
     proxy = os.environ.get("PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY")
+    if not proxy:
+        # Auto-detect Cloudflare WARP SOCKS5 proxy on localhost
+        try:
+            s = socket.create_connection(("127.0.0.1", 40000), timeout=1)
+            s.close()
+            proxy = "socks5://127.0.0.1:40000"
+        except (OSError, socket.timeout):
+            pass
     if proxy:
         opts["proxy"] = proxy
 

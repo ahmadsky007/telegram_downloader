@@ -1,6 +1,8 @@
 aiogram>=3.15
 yt-dlp>=2026.8.19
 curl_cffi>=0.10,<0.16.0
+bgutil-ytdlp-pot-provider
+pysocks>=1.7
 fastapi>=0.115
 uvicorn>=0.30
 python-dotenv>=1.0
