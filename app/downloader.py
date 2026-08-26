@@ -45,10 +45,9 @@ def _base_opts(workdir: Path | None = None) -> dict:
         "concurrent_fragment_downloads": 4,
         "geo_bypass": True,
         "remote_components": ["ejs:github"],
-        "impersonate": "chrome",
         "extractor_args": {
             "youtube": {
-                "player_client": ["default"],
+                "player_client": ["android", "ios", "mweb", "web"],
             }
         },
         "http_headers": {
