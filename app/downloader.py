@@ -36,7 +36,14 @@ def _find_js_runtime() -> dict:
     return {}
 
 
-def _base_opts(workdir: Path | None = None) -> dict:
+def is_youtube_url(url: str | None) -> bool:
+    if not url:
+        return False
+    u = url.lower()
+    return "youtube.com" in u or "youtu.be" in u
+
+
+def _base_opts(url: str | None = None, workdir: Path | None = None) -> dict:
     opts: dict = {
         "quiet": True,
         "noprogress": True,
@@ -81,17 +88,19 @@ def _base_opts(workdir: Path | None = None) -> dict:
         except Exception:
             pass
 
-    proxy = os.environ.get("PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY")
-    if not proxy:
-        # Auto-detect Cloudflare WARP SOCKS5 proxy on localhost
-        try:
-            s = socket.create_connection(("127.0.0.1", 40000), timeout=1)
-            s.close()
-            proxy = "socks5://127.0.0.1:40000"
-        except (OSError, socket.timeout):
-            pass
-    if proxy:
-        opts["proxy"] = proxy
+    # Only route YouTube requests through proxy to preserve proxy bandwidth and prevent 402 limits on TikTok/Instagram
+    if is_youtube_url(url):
+        proxy = os.environ.get("PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY")
+        if not proxy:
+            # Auto-detect Cloudflare WARP SOCKS5 proxy on localhost
+            try:
+                s = socket.create_connection(("127.0.0.1", 40000), timeout=1)
+                s.close()
+                proxy = "socks5://127.0.0.1:40000"
+            except (OSError, socket.timeout):
+                pass
+        if proxy:
+            opts["proxy"] = proxy
 
     if workdir is not None:
         opts["outtmpl"] = str(workdir / "%(title).80B [%(id)s].%(ext)s")
@@ -99,7 +108,7 @@ def _base_opts(workdir: Path | None = None) -> dict:
 
 
 def probe(url: str) -> dict:
-    with yt_dlp.YoutubeDL(_base_opts()) as ydl:
+    with yt_dlp.YoutubeDL(_base_opts(url)) as ydl:
         info = ydl.extract_info(url, download=False)
     if info.get("_type") == "playlist":
         entries = [e for e in (info.get("entries") or []) if e]
@@ -174,7 +183,7 @@ def video_format(height: int | None) -> str:
 
 
 def download_video(url: str, workdir: Path, height: int | None, hook: Callable) -> Path:
-    opts = _base_opts(workdir) | {
+    opts = _base_opts(url=url, workdir=workdir) | {
         "format": video_format(height),
         "merge_output_format": "mp4",
         "progress_hooks": [hook],
@@ -186,7 +195,7 @@ def download_video(url: str, workdir: Path, height: int | None, hook: Callable) 
 
 
 def download_mp3(url: str, workdir: Path, bitrate: int, hook: Callable) -> Path:
-    opts = _base_opts(workdir) | {
+    opts = _base_opts(url=url, workdir=workdir) | {
         "format": "ba/b",
         "progress_hooks": [hook],
         "postprocessor_hooks": [hook],
