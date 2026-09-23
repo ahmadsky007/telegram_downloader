@@ -74,16 +74,35 @@ async def lifespan(app: FastAPI):
     app.state.bot = bot
     app.state.dp = dp
     updater_task = asyncio.create_task(auto_update_ytdlp_loop())
+    # Resolve effective mode and URL using local vars (Settings may be frozen)
+    import os as _os
+    import urllib.request as _req
+    effective_mode = settings.bot_mode
+    effective_webhook_url = settings.webhook_url
     polling_task = None
-    if settings.bot_mode == "webhook":
-        if not settings.webhook_url:
-            raise RuntimeError("WEBHOOK_URL is required in webhook mode")
+
+    if effective_mode == "webhook":
+        if not effective_webhook_url:
+            # Auto-detect from Cloud Run metadata
+            _k_service = _os.environ.get("K_SERVICE", "")
+            _metadata_url = "http://metadata.google.internal/computeMetadata/v1/project/numeric-project-id"
+            try:
+                _r = _req.Request(_metadata_url, headers={"Metadata-Flavor": "Google"})
+                _proj_num = _req.urlopen(_r, timeout=2).read().decode()
+                _region = _os.environ.get("CLOUD_RUN_REGION", "us-central1")
+                effective_webhook_url = f"https://{_k_service}-{_proj_num}.{_region}.run.app"
+                logger.info("Auto-detected WEBHOOK_URL: %s", effective_webhook_url)
+            except Exception as _e:
+                logger.warning("Could not auto-detect WEBHOOK_URL (%s), falling back to polling", _e)
+                effective_mode = "polling"
+
+    if effective_mode == "webhook" and effective_webhook_url:
         await bot.set_webhook(
-            f"{settings.webhook_url}/webhook",
+            f"{effective_webhook_url}/webhook",
             secret_token=settings.webhook_secret,
             drop_pending_updates=True,
         )
-        logger.info("webhook set to %s/webhook", settings.webhook_url)
+        logger.info("webhook set to %s/webhook", effective_webhook_url)
     else:
         await bot.delete_webhook(drop_pending_updates=True)
         polling_task = asyncio.create_task(dp.start_polling(bot))

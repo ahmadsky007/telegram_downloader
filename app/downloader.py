@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import shutil
 import socket
 import subprocess
@@ -43,7 +44,20 @@ def is_youtube_url(url: str | None) -> bool:
     return "youtube.com" in u or "youtu.be" in u
 
 
-def _base_opts(url: str | None = None, workdir: Path | None = None) -> dict:
+def _get_proxies() -> list[str]:
+    raw = (
+        os.environ.get("YOUTUBE_PROXY")
+        or os.environ.get("PROXY")
+        or os.environ.get("HTTP_PROXY")
+        or os.environ.get("HTTPS_PROXY")
+        or ""
+    ).strip()
+    if not raw:
+        return []
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+
+def _base_opts(url: str | None = None, workdir: Path | None = None, proxy: str | None = None) -> dict:
     opts: dict = {
         "quiet": True,
         "noprogress": True,
@@ -64,7 +78,6 @@ def _base_opts(url: str | None = None, workdir: Path | None = None) -> dict:
         os.environ.get("COOKIE_FILE"),
         os.environ.get("COOKIES_FILE"),
         "/etc/secrets/cookies.txt",
-        "cookies.txt",
     ):
         if candidate and Path(candidate).is_file():
             cookie_source = Path(candidate)
@@ -78,29 +91,24 @@ def _base_opts(url: str | None = None, workdir: Path | None = None) -> dict:
             opts["cookiefile"] = str(target_cookie)
         except Exception:
             opts["cookiefile"] = str(cookie_source)
-    elif os.environ.get("COOKIES_DATA") or os.environ.get("YOUTUBE_COOKIES"):
-        try:
-            data = (os.environ.get("COOKIES_DATA") or os.environ.get("YOUTUBE_COOKIES") or "").strip()
-            if data:
-                target_cookie.write_text(data)
-                target_cookie.chmod(0o600)
-                opts["cookiefile"] = str(target_cookie)
-        except Exception:
-            pass
 
     # Only route YouTube requests through proxy to preserve proxy bandwidth and prevent 402 limits on TikTok/Instagram
     if is_youtube_url(url):
-        proxy = os.environ.get("PROXY") or os.environ.get("HTTP_PROXY") or os.environ.get("HTTPS_PROXY")
-        if not proxy:
-            # Auto-detect Cloudflare WARP SOCKS5 proxy on localhost
-            try:
-                s = socket.create_connection(("127.0.0.1", 40000), timeout=1)
-                s.close()
-                proxy = "socks5://127.0.0.1:40000"
-            except (OSError, socket.timeout):
-                pass
-        if proxy:
-            opts["proxy"] = proxy
+        p = proxy
+        if not p:
+            proxies = _get_proxies()
+            if proxies:
+                p = random.choice(proxies)
+            else:
+                # Auto-detect Cloudflare WARP SOCKS5 proxy on localhost if running
+                try:
+                    s = socket.create_connection(("127.0.0.1", 40000), timeout=1)
+                    s.close()
+                    p = "socks5://127.0.0.1:40000"
+                except (OSError, socket.timeout):
+                    pass
+        if p:
+            opts["proxy"] = p
 
     if workdir is not None:
         opts["outtmpl"] = str(workdir / "%(title).80B [%(id)s].%(ext)s")
@@ -108,8 +116,26 @@ def _base_opts(url: str | None = None, workdir: Path | None = None) -> dict:
 
 
 def probe(url: str) -> dict:
-    with yt_dlp.YoutubeDL(_base_opts(url)) as ydl:
-        info = ydl.extract_info(url, download=False)
+    proxies = _get_proxies() if is_youtube_url(url) else []
+    candidates = list(proxies)
+    random.shuffle(candidates)
+    if not candidates:
+        candidates = [None]
+
+    info = None
+    last_exc = None
+    for p in candidates:
+        try:
+            with yt_dlp.YoutubeDL(_base_opts(url, proxy=p)) as ydl:
+                info = ydl.extract_info(url, download=False)
+                if info:
+                    break
+        except Exception as e:
+            last_exc = e
+            continue
+
+    if not info:
+        raise DownloadError(str(last_exc or "No downloadable media found at this link."))
     if info.get("_type") == "playlist":
         entries = [e for e in (info.get("entries") or []) if e]
         if not entries:
@@ -183,34 +209,60 @@ def video_format(height: int | None) -> str:
 
 
 def download_video(url: str, workdir: Path, height: int | None, hook: Callable) -> Path:
-    opts = _base_opts(url=url, workdir=workdir) | {
-        "format": video_format(height),
-        "merge_output_format": "mp4",
-        "progress_hooks": [hook],
-        "postprocessor_hooks": [hook],
-    }
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        ydl.extract_info(url, download=True)
-    return _find_output(workdir, (".mp4", ".mkv", ".webm", ".mov"))
+    proxies = _get_proxies() if is_youtube_url(url) else []
+    candidates = list(proxies)
+    random.shuffle(candidates)
+    if not candidates:
+        candidates = [None]
+
+    last_exc = None
+    for p in candidates:
+        try:
+            opts = _base_opts(url=url, workdir=workdir, proxy=p) | {
+                "format": video_format(height),
+                "merge_output_format": "mp4",
+                "progress_hooks": [hook],
+                "postprocessor_hooks": [hook],
+            }
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.extract_info(url, download=True)
+            return _find_output(workdir, (".mp4", ".mkv", ".webm", ".mov"))
+        except Exception as e:
+            last_exc = e
+            continue
+    raise DownloadError(str(last_exc or "Processing finished but no output file was produced."))
 
 
 def download_mp3(url: str, workdir: Path, bitrate: int, hook: Callable) -> Path:
-    opts = _base_opts(url=url, workdir=workdir) | {
-        "format": "ba/b",
-        "progress_hooks": [hook],
-        "postprocessor_hooks": [hook],
-        "postprocessors": [
-            {
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": str(bitrate),
-            },
-            {"key": "FFmpegMetadata"},
-        ],
-    }
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        ydl.extract_info(url, download=True)
-    return _find_output(workdir, (".mp3",))
+    proxies = _get_proxies() if is_youtube_url(url) else []
+    candidates = list(proxies)
+    random.shuffle(candidates)
+    if not candidates:
+        candidates = [None]
+
+    last_exc = None
+    for p in candidates:
+        try:
+            opts = _base_opts(url=url, workdir=workdir, proxy=p) | {
+                "format": "ba/b",
+                "progress_hooks": [hook],
+                "postprocessor_hooks": [hook],
+                "postprocessors": [
+                    {
+                        "key": "FFmpegExtractAudio",
+                        "preferredcodec": "mp3",
+                        "preferredquality": str(bitrate),
+                    },
+                    {"key": "FFmpegMetadata"},
+                ],
+            }
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.extract_info(url, download=True)
+            return _find_output(workdir, (".mp3",))
+        except Exception as e:
+            last_exc = e
+            continue
+    raise DownloadError(str(last_exc or "Processing finished but no output file was produced."))
 
 
 def video_meta(path: Path) -> dict:
