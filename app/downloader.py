@@ -65,7 +65,7 @@ def _base_opts(url: str | None = None, workdir: Path | None = None, proxy: str |
         "noprogress": True,
         "no_warnings": True,
         "noplaylist": True,
-        "socket_timeout": 30,
+        "socket_timeout": 10,
         "retries": 5,
         "fragment_retries": 5,
         "extractor_retries": 3,
@@ -284,26 +284,24 @@ def download_mp3(url: str, workdir: Path, bitrate: int, hook: Callable) -> Path:
 
 
 def video_meta(path: Path) -> dict:
-    result = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "quiet",
-            "-print_format",
-            "json",
-            "-show_streams",
-            "-select_streams",
-            "v:0",
-            str(path),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
     try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "quiet",
+                "-print_format", "json",
+                "-show_streams",
+                "-select_streams", "v:0",
+                "-skip_frame", "noref",   # fast: skip non-reference frames
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,  # was 60s — caused crashes on large files
+        )
         stream = json.loads(result.stdout)["streams"][0]
         return {"width": stream.get("width"), "height": stream.get("height")}
-    except (KeyError, IndexError, json.JSONDecodeError):
+    except (KeyError, IndexError, json.JSONDecodeError, subprocess.TimeoutExpired, OSError):
         return {}
 
 
