@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import random
 import shutil
@@ -13,6 +14,7 @@ STANDARD_HEIGHTS = (1080, 720, 480, 360)
 MAX_HEIGHT = 1080
 AUDIO_BITRATES = (320, 192, 128)
 
+logger = logging.getLogger(__name__)
 
 class DownloadError(Exception):
     pass
@@ -124,13 +126,17 @@ def probe(url: str) -> dict:
 
     info = None
     last_exc = None
-    for p in candidates:
+    for i, p in enumerate(candidates):
+        proxy_label = p.split("@")[-1] if p else "direct"
         try:
+            logger.info("probe: trying proxy %d/%d (%s)", i + 1, len(candidates), proxy_label)
             with yt_dlp.YoutubeDL(_base_opts(url, proxy=p)) as ydl:
                 info = ydl.extract_info(url, download=False)
                 if info:
+                    logger.info("probe: success with proxy %s", proxy_label)
                     break
         except Exception as e:
+            logger.warning("probe: proxy %s failed: %s", proxy_label, e)
             last_exc = e
             continue
 
@@ -216,8 +222,10 @@ def download_video(url: str, workdir: Path, height: int | None, hook: Callable) 
         candidates = [None]
 
     last_exc = None
-    for p in candidates:
+    for i, p in enumerate(candidates):
+        proxy_label = p.split("@")[-1] if p else "direct"
         try:
+            logger.info("download_video: trying proxy %d/%d (%s)", i + 1, len(candidates), proxy_label)
             opts = _base_opts(url=url, workdir=workdir, proxy=p) | {
                 "format": video_format(height),
                 "merge_output_format": "mp4",
@@ -226,8 +234,10 @@ def download_video(url: str, workdir: Path, height: int | None, hook: Callable) 
             }
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.extract_info(url, download=True)
+            logger.info("download_video: success with proxy %s", proxy_label)
             return _find_output(workdir, (".mp4", ".mkv", ".webm", ".mov"))
         except Exception as e:
+            logger.warning("download_video: proxy %s failed: %s", proxy_label, e)
             last_exc = e
             continue
     raise DownloadError(str(last_exc or "Processing finished but no output file was produced."))
@@ -241,8 +251,10 @@ def download_mp3(url: str, workdir: Path, bitrate: int, hook: Callable) -> Path:
         candidates = [None]
 
     last_exc = None
-    for p in candidates:
+    for i, p in enumerate(candidates):
+        proxy_label = p.split("@")[-1] if p else "direct"
         try:
+            logger.info("download_mp3: trying proxy %d/%d (%s)", i + 1, len(candidates), proxy_label)
             opts = _base_opts(url=url, workdir=workdir, proxy=p) | {
                 "format": "ba/b",
                 "progress_hooks": [hook],
@@ -258,8 +270,10 @@ def download_mp3(url: str, workdir: Path, bitrate: int, hook: Callable) -> Path:
             }
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.extract_info(url, download=True)
+            logger.info("download_mp3: success with proxy %s", proxy_label)
             return _find_output(workdir, (".mp3",))
         except Exception as e:
+            logger.warning("download_mp3: proxy %s failed: %s", proxy_label, e)
             last_exc = e
             continue
     raise DownloadError(str(last_exc or "Processing finished but no output file was produced."))
