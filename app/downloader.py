@@ -230,21 +230,38 @@ def download_video(url: str, workdir: Path, height: int | None, hook: Callable) 
         proxy_label = p.split("@")[-1] if p else "direct"
         try:
             logger.info("download_video: trying proxy %d/%d (%s)", i + 1, len(candidates), proxy_label)
-            opts = _base_opts(url=url, workdir=workdir, proxy=p) | {
-                "format": video_format(height),
-                "merge_output_format": "mp4",
-                "progress_hooks": [hook],
-                "postprocessor_hooks": [hook],
-            }
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                ydl.extract_info(url, download=True)
-            logger.info("download_video: success with proxy %s", proxy_label)
+
+            # Phase 1: extract info (signed CDN URLs) through proxy
+            extract_opts = _base_opts(url=url, proxy=p)
+            extract_opts["format"] = video_format(height)
+            with yt_dlp.YoutubeDL(extract_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+
+            if not info:
+                raise DownloadError("No info extracted")
+
+            # Phase 2: download bytes directly (no proxy) — YouTube CDN URLs
+            # are signed and work from any IP, so we bypass the slow proxy
+            # and use Cloud Run's fast Google backbone connection instead.
+            dl_opts = _base_opts(url=None, workdir=workdir, proxy=None)
+            dl_opts["proxy"] = ""  # explicitly disable proxy for download phase
+            dl_opts["format"] = video_format(height)
+            dl_opts["merge_output_format"] = "mp4"
+            dl_opts["progress_hooks"] = [hook]
+            dl_opts["postprocessor_hooks"] = [hook]
+            dl_opts["concurrent_fragment_downloads"] = 16  # max out on direct connection
+            with yt_dlp.YoutubeDL(dl_opts) as ydl:
+                ydl.download_with_info_file  # noqa — use process_info instead
+                ydl.process_info(info)
+
+            logger.info("download_video: success (proxy=%s, direct download)", proxy_label)
             return _find_output(workdir, (".mp4", ".mkv", ".webm", ".mov"))
         except Exception as e:
             logger.warning("download_video: proxy %s failed: %s", proxy_label, e)
             last_exc = e
             continue
     raise DownloadError(str(last_exc or "Processing finished but no output file was produced."))
+
 
 
 def download_mp3(url: str, workdir: Path, bitrate: int, hook: Callable) -> Path:
@@ -259,28 +276,42 @@ def download_mp3(url: str, workdir: Path, bitrate: int, hook: Callable) -> Path:
         proxy_label = p.split("@")[-1] if p else "direct"
         try:
             logger.info("download_mp3: trying proxy %d/%d (%s)", i + 1, len(candidates), proxy_label)
-            opts = _base_opts(url=url, workdir=workdir, proxy=p) | {
-                "format": "ba/b",
-                "progress_hooks": [hook],
-                "postprocessor_hooks": [hook],
-                "postprocessors": [
-                    {
-                        "key": "FFmpegExtractAudio",
-                        "preferredcodec": "mp3",
-                        "preferredquality": str(bitrate),
-                    },
-                    {"key": "FFmpegMetadata"},
-                ],
-            }
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                ydl.extract_info(url, download=True)
-            logger.info("download_mp3: success with proxy %s", proxy_label)
+
+            # Phase 1: extract audio stream URL via proxy
+            extract_opts = _base_opts(url=url, proxy=p)
+            extract_opts["format"] = "ba/b"
+            with yt_dlp.YoutubeDL(extract_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+
+            if not info:
+                raise DownloadError("No info extracted")
+
+            # Phase 2: download bytes directly without proxy, then convert to MP3
+            dl_opts = _base_opts(url=None, workdir=workdir, proxy=None)
+            dl_opts["proxy"] = ""
+            dl_opts["format"] = "ba/b"
+            dl_opts["progress_hooks"] = [hook]
+            dl_opts["postprocessor_hooks"] = [hook]
+            dl_opts["concurrent_fragment_downloads"] = 16
+            dl_opts["postprocessors"] = [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": str(bitrate),
+                },
+                {"key": "FFmpegMetadata"},
+            ]
+            with yt_dlp.YoutubeDL(dl_opts) as ydl:
+                ydl.process_info(info)
+
+            logger.info("download_mp3: success (proxy=%s, direct download)", proxy_label)
             return _find_output(workdir, (".mp3",))
         except Exception as e:
             logger.warning("download_mp3: proxy %s failed: %s", proxy_label, e)
             last_exc = e
             continue
     raise DownloadError(str(last_exc or "Processing finished but no output file was produced."))
+
 
 
 def video_meta(path: Path) -> dict:
