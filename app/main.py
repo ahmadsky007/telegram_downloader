@@ -52,7 +52,7 @@ async def auto_update_ytdlp_loop() -> None:
 def build_bot(settings: Settings) -> Bot:
     session = None
     if settings.telegram_api_url:
-        session = AiohttpSession(api=TelegramAPIServer.from_base(settings.telegram_api_url))
+        session = AiohttpSession(api=TelegramAPIServer.from_base(settings.telegram_api_url, is_local=True))
     return Bot(token=settings.bot_token, session=session)
 
 
