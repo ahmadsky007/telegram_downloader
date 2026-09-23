@@ -66,8 +66,12 @@ def _base_opts(url: str | None = None, workdir: Path | None = None, proxy: str |
         "no_warnings": True,
         "noplaylist": True,
         "socket_timeout": 30,
-        "retries": 3,
-        "concurrent_fragment_downloads": 4,
+        "retries": 5,
+        "fragment_retries": 5,
+        "extractor_retries": 3,
+        "concurrent_fragment_downloads": 10,
+        "buffersize": 1024 * 1024,  # 1MB buffer
+        "http_chunk_size": 10 * 1024 * 1024,  # 10MB chunks for non-DASH
         "geo_bypass": True,
         "remote_components": ["ejs:github"],
     }
