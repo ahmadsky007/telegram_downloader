@@ -130,6 +130,18 @@ async def webhook(request: Request):
     data = await request.json()
     update = Update.model_validate(data, context={"bot": request.app.state.bot})
     await request.app.state.dp.feed_update(request.app.state.bot, update)
+
+    # Keep this request alive while background download tasks are running.
+    # Cloud Run scales to zero when there are no active HTTP requests — if we
+    # return immediately the instance gets killed mid-download.
+    st = request.app.state.dp["st"]
+    if st.tasks:
+        deadline = 870  # just under Cloud Run's 900s request timeout
+        elapsed = 0
+        while st.tasks and elapsed < deadline:
+            await asyncio.sleep(5)
+            elapsed += 5
+
     return {"ok": True}
 
 
