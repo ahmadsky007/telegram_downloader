@@ -6,3 +6,5 @@ downloads/
 .DS_Store
 cookies.txt
 *cookies*.txt
+oauth2_token.json
+scripts/auth_youtube.py
