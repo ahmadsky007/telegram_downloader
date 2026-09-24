@@ -407,6 +407,11 @@ async def cb_download(cb: CallbackQuery, bot: Bot, st: BotState) -> None:
     )
     st.tasks.add(task)
     task.add_done_callback(st.tasks.discard)
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        pass
+
 
 
 async def _run_download(
