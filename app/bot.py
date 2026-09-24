@@ -265,19 +265,52 @@ async def handle_link(message: Message, st: BotState) -> None:
     await status.edit_text(f"🎞 {info['title']}\n\nDownload as:", reply_markup=keyboard)
 
 
+async def _safe_answer(cb: CallbackQuery, *args, **kwargs) -> None:
+    try:
+        await cb.answer(*args, **kwargs)
+    except Exception:
+        pass
+
+
 async def _get_request(cb: CallbackQuery, st: BotState, rid: str) -> PendingRequest | None:
     req = st.get_request(rid)
     if req is None:
-        await cb.answer("This request expired. Send the link again.", show_alert=True)
+        # Auto-recover request if instance scaled to zero / restarted
+        try:
+            msg = cb.message
+            orig_msg = msg.reply_to_message if msg else None
+            text = (orig_msg.text or orig_msg.caption or "") if orig_msg else ""
+            url = extract_url(text)
+            if url:
+                req = PendingRequest(
+                    url=url,
+                    title="media",
+                    duration=None,
+                    uploader=None,
+                    heights=[],
+                    sizes={},
+                    direct=None,
+                    user_id=cb.from_user.id,
+                    chat_id=cb.message.chat.id,
+                    link_message_id=orig_msg.message_id if orig_msg else cb.message.message_id,
+                )
+                st.set_request(rid, req)
+                logger.info("Auto-recovered pending request %s for %s from message history", rid, url)
+                return req
+        except Exception as e:
+            logger.warning("Could not auto-recover request %s: %s", rid, e)
+
+        await _safe_answer(cb, "This request expired. Send the link again.", show_alert=True)
         try:
             await cb.message.delete()
         except Exception:
             pass
         return None
     if cb.from_user.id != req.user_id:
-        await cb.answer("This request belongs to another user.", show_alert=True)
+        await _safe_answer(cb, "This request belongs to another user.", show_alert=True)
         return None
     return req
+
 
 
 @router.callback_query(F.data.startswith("x:"))
@@ -285,14 +318,14 @@ async def cb_cancel(cb: CallbackQuery, st: BotState) -> None:
     rid = cb.data.split(":", 1)[1]
     req = st.get_request(rid)
     if req is not None and cb.from_user.id != req.user_id:
-        await cb.answer("This request belongs to another user.", show_alert=True)
+        await _safe_answer(cb, "This request belongs to another user.", show_alert=True)
         return
     st.pop_request(rid)
     try:
         await cb.message.delete()
     except Exception:
         pass
-    await cb.answer("Cancelled")
+    await _safe_answer(cb, "Cancelled")
 
 
 @router.callback_query(F.data.startswith("v:"))
@@ -315,11 +348,14 @@ async def cb_video_menu(cb: CallbackQuery, st: BotState) -> None:
     ]
     rows = [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
     rows.append([InlineKeyboardButton(text="✖️ Cancel", callback_data=f"x:{rid}")])
-    await cb.message.edit_text(
-        f"🎞 {req.title}\n\nChoose video quality:",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
-    )
-    await cb.answer()
+    try:
+        await cb.message.edit_text(
+            f"🎞 {req.title}\n\nChoose video quality:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+    except Exception:
+        pass
+    await _safe_answer(cb)
 
 
 @router.callback_query(F.data.startswith("a:"))
@@ -338,11 +374,14 @@ async def cb_audio_menu(cb: CallbackQuery, st: BotState) -> None:
         ],
         [InlineKeyboardButton(text="✖️ Cancel", callback_data=f"x:{rid}")],
     ]
-    await cb.message.edit_text(
-        f"🎵 {req.title}\n\nChoose MP3 bitrate:",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
-    )
-    await cb.answer()
+    try:
+        await cb.message.edit_text(
+            f"🎵 {req.title}\n\nChoose MP3 bitrate:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
+        )
+    except Exception:
+        pass
+    await _safe_answer(cb)
 
 
 async def send_direct_link(
@@ -382,7 +421,8 @@ async def cb_download(cb: CallbackQuery, bot: Bot, st: BotState) -> None:
     if req is None:
         return
     if st.active.get(cb.from_user.id, 0) >= MAX_ACTIVE_PER_USER:
-        await cb.answer(
+        await _safe_answer(
+            cb,
             f"⏳ You already have {MAX_ACTIVE_PER_USER} downloads running. "
             "Wait for one to finish.",
             show_alert=True,
@@ -396,15 +436,16 @@ async def cb_download(cb: CallbackQuery, bot: Bot, st: BotState) -> None:
         )
         if est and est > limit_bytes:
             st.pop_request(rid)
-            await cb.answer()
+            await _safe_answer(cb)
             await send_direct_link(cb, st, req, est)
             return
     st.pop_request(rid)
     st.active[req.user_id] = st.active.get(req.user_id, 0) + 1
-    await cb.answer("Started — the file will arrive when it's ready")
+    await _safe_answer(cb, "Started — the file will arrive when it's ready")
     task = asyncio.create_task(
         _run_download(cb, bot, st, kind, rid, value, req)
     )
+
     st.tasks.add(task)
     task.add_done_callback(st.tasks.discard)
     try:
