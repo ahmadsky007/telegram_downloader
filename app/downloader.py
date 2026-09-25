@@ -65,15 +65,19 @@ def _base_opts(url: str | None = None, workdir: Path | None = None, proxy: str |
         "noprogress": True,
         "no_warnings": True,
         "noplaylist": True,
-        "socket_timeout": 10,
+        "socket_timeout": 15,
         "retries": 5,
         "fragment_retries": 5,
         "extractor_retries": 3,
-        "concurrent_fragment_downloads": 10,
+        "concurrent_fragment_downloads": 5,
         "buffersize": 1024 * 1024,  # 1MB buffer
-        "http_chunk_size": 10 * 1024 * 1024,  # 10MB chunks for non-DASH
         "geo_bypass": True,
         "remote_components": ["ejs:github"],
+        "extractor_args": {
+            "youtubepot-bgutilhttp": {
+                "base_url": ["http://127.0.0.1:4416"],
+            }
+        },
     }
     js_runtime = _find_js_runtime()
     if js_runtime:
@@ -228,6 +232,16 @@ def download_video(url: str, workdir: Path, height: int | None, hook: Callable) 
     last_exc = None
     for i, p in enumerate(candidates):
         proxy_label = p.split("@")[-1] if p else "direct"
+        # Always wipe partial / corrupt files before attempting with a new proxy
+        for item in list(workdir.iterdir()):
+            try:
+                if item.is_file():
+                    item.unlink(missing_ok=True)
+                elif item.is_dir():
+                    shutil.rmtree(item, ignore_errors=True)
+            except Exception:
+                pass
+
         try:
             logger.info("download_video: trying proxy %d/%d (%s)", i + 1, len(candidates), proxy_label)
             opts = _base_opts(url=url, workdir=workdir, proxy=p) | {
@@ -258,6 +272,16 @@ def download_mp3(url: str, workdir: Path, bitrate: int, hook: Callable) -> Path:
     last_exc = None
     for i, p in enumerate(candidates):
         proxy_label = p.split("@")[-1] if p else "direct"
+        # Always wipe partial / corrupt files before attempting with a new proxy
+        for item in list(workdir.iterdir()):
+            try:
+                if item.is_file():
+                    item.unlink(missing_ok=True)
+                elif item.is_dir():
+                    shutil.rmtree(item, ignore_errors=True)
+            except Exception:
+                pass
+
         try:
             logger.info("download_mp3: trying proxy %d/%d (%s)", i + 1, len(candidates), proxy_label)
             opts = _base_opts(url=url, workdir=workdir, proxy=p) | {
