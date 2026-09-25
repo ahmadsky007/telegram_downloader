@@ -232,19 +232,11 @@ def download_video(url: str, workdir: Path, height: int | None, hook: Callable) 
     last_exc = None
     for i, p in enumerate(candidates):
         proxy_label = p.split("@")[-1] if p else "direct"
-        # Always wipe partial / corrupt files before attempting with a new proxy
-        for item in list(workdir.iterdir()):
-            try:
-                if item.is_file():
-                    item.unlink(missing_ok=True)
-                elif item.is_dir():
-                    shutil.rmtree(item, ignore_errors=True)
-            except Exception:
-                pass
-
+        attempt_dir = workdir / f"attempt_{i}"
+        attempt_dir.mkdir(parents=True, exist_ok=True)
         try:
             logger.info("download_video: trying proxy %d/%d (%s)", i + 1, len(candidates), proxy_label)
-            opts = _base_opts(url=url, workdir=workdir, proxy=p) | {
+            opts = _base_opts(url=url, workdir=attempt_dir, proxy=p) | {
                 "format": video_format(height),
                 "merge_output_format": "mp4",
                 "progress_hooks": [hook],
@@ -253,10 +245,11 @@ def download_video(url: str, workdir: Path, height: int | None, hook: Callable) 
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.extract_info(url, download=True)
             logger.info("download_video: success with proxy %s", proxy_label)
-            return _find_output(workdir, (".mp4", ".mkv", ".webm", ".mov"))
+            return _find_output(attempt_dir, (".mp4", ".mkv", ".webm", ".mov"))
         except Exception as e:
             logger.warning("download_video: proxy %s failed: %s", proxy_label, e)
             last_exc = e
+            shutil.rmtree(attempt_dir, ignore_errors=True)
             continue
     raise DownloadError(str(last_exc or "Processing finished but no output file was produced."))
 
@@ -272,19 +265,11 @@ def download_mp3(url: str, workdir: Path, bitrate: int, hook: Callable) -> Path:
     last_exc = None
     for i, p in enumerate(candidates):
         proxy_label = p.split("@")[-1] if p else "direct"
-        # Always wipe partial / corrupt files before attempting with a new proxy
-        for item in list(workdir.iterdir()):
-            try:
-                if item.is_file():
-                    item.unlink(missing_ok=True)
-                elif item.is_dir():
-                    shutil.rmtree(item, ignore_errors=True)
-            except Exception:
-                pass
-
+        attempt_dir = workdir / f"attempt_{i}"
+        attempt_dir.mkdir(parents=True, exist_ok=True)
         try:
             logger.info("download_mp3: trying proxy %d/%d (%s)", i + 1, len(candidates), proxy_label)
-            opts = _base_opts(url=url, workdir=workdir, proxy=p) | {
+            opts = _base_opts(url=url, workdir=attempt_dir, proxy=p) | {
                 "format": "ba/b",
                 "progress_hooks": [hook],
                 "postprocessor_hooks": [hook],
@@ -300,12 +285,14 @@ def download_mp3(url: str, workdir: Path, bitrate: int, hook: Callable) -> Path:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.extract_info(url, download=True)
             logger.info("download_mp3: success with proxy %s", proxy_label)
-            return _find_output(workdir, (".mp3",))
+            return _find_output(attempt_dir, (".mp3",))
         except Exception as e:
             logger.warning("download_mp3: proxy %s failed: %s", proxy_label, e)
             last_exc = e
+            shutil.rmtree(attempt_dir, ignore_errors=True)
             continue
     raise DownloadError(str(last_exc or "Processing finished but no output file was produced."))
+
 
 
 

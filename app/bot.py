@@ -464,7 +464,7 @@ async def _run_download(
     value: str,
     req: PendingRequest,
 ) -> None:
-    workdir = Path(st.settings.download_dir) / rid
+    workdir = Path(st.settings.download_dir) / f"{rid}_{uuid.uuid4().hex[:6]}"
     workdir.mkdir(parents=True, exist_ok=True)
     reporter = ProgressReporter(bot, cb.message.chat.id, cb.message.message_id)
     delivered = False
